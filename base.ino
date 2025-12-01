@@ -1,3 +1,19 @@
+/*
+ * 本程序通过采集音频信号并进行FFT变换，实现音乐节奏检测与灯光联动。
+ *
+ * 工作流程说明：
+ * 1. 每次 loop() 循环时，先从模拟输入通道（CHANNEL）以设定的采样周期（sampling_period_us）采集一段音频数据。
+ * 2. 对采集到的数据进行FFT变换，得到频域数据，幅值存储在 vReal 数组中。
+ * 3. 将频域数据划分为7个频率段（分箱），分别计算每个频段的信号强度。
+ * 4. 对每个频段的幅值进行去噪和放大处理，滤除底噪并平衡各频段信号。
+ * 5. 若某个频段信号强度超过阈值，则认为检测到节拍（beat），并进行计数。
+ * 6. 若本周期内检测到节拍，则触发灯光变化，实现音乐与灯光的联动响应。
+ *
+ * 主要目标：判断当前采样周期内的音频信号是否包含强拍，并通过灯光进行可视化反馈。
+ * 
+ * 当前问题：每116ms只“取”16ms，其余时间“闭耳不听”，所以有些节拍会漏掉。
+ */
+
 #include "arduinoFFT.h"
 #include <Adafruit_NeoPixel.h>
 
@@ -50,7 +66,7 @@ void setup()
     rgb_display_9.begin();
     rgb_display_9.setPin(9);
 
-    // 计算采样周期（微秒）
+    // 计算采样周期（单位微秒）
     sampling_period_us = round(1000000 * (1.0 / samplingFrequency));
     // 初始化串口通信，波特率9600
     Serial.begin(9600);
@@ -111,7 +127,7 @@ void loop()
     // 记录开始采样时间
     microseconds = micros();
     // 采集FFT样本点
-    for (int i = 0; i < samples; i++)
+    for (int i = 0; i < samples; i++) // 250us * 64 = 16000us = 16ms
     {
         // 读取模拟输入
         vReal[i] = analogRead(CHANNEL);
