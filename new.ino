@@ -1,0 +1,206 @@
+/*
+ * 音乐律动彩灯 - 频域定颜色，时域定节奏
+ * 
+ * 实现思路：
+ * 1. 每次 loop 连续采样音频数据并做 FFT，得到频域能量分布。
+ * 2. 将频域划分为 3 个频段（低频/中频/高频），分别对应红/绿/蓝颜色。
+ * 3. 找出当前能量最高的频段，决定灯光颜色。
+ * 4. 同时在时域检测音量突变（节拍），只有检测到节拍时才切换灯光颜色。
+ * 5. 这样既能根据音乐风格显示不同颜色，又能跟着节奏律动。
+ */
+
+#include "arduinoFFT.h"
+#include <Adafruit_NeoPixel.h>
+
+// ========== 硬件配置 ==========
+#define CHANNEL A0           // 音频输入通道
+#define LED_PIN 9            // RGB灯带控制引脚
+#define LED_COUNT 10         // 灯珠数量
+
+// ========== FFT 参数 ==========
+const uint16_t samples = 64;              // 采样点数（2的幂）
+const double samplingFrequency = 4000;    // 采样频率 4kHz
+unsigned int sampling_period_us;          // 采样周期（微秒）
+
+float vReal[samples];
+float vImag[samples];
+ArduinoFFT<float> FFT = ArduinoFFT<float>(vReal, vImag, samples, samplingFrequency);
+
+// ========== RGB 灯带 ==========
+Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
+
+// ========== 节拍检测参数 ==========
+int lastVolume = 0;                       // 上一次音量
+const int beatThreshold = 80;             // 节拍检测阈值（音量突变）
+unsigned long lastBeatTime = 0;           // 上次节拍时间
+const unsigned long minBeatInterval = 200; // 最小节拍间隔（ms）
+
+// ========== 频段能量存储 ==========
+float lowEnergy = 0;     // 低频能量（红色）
+float midEnergy = 0;     // 中频能量（绿色）
+float highEnergy = 0;    // 高频能量（蓝色）
+
+void setup()
+{
+    Serial.begin(9600);
+    
+    // 初始化 RGB 灯带
+    strip.begin();
+    strip.show(); // 初始化为全灭
+    strip.setBrightness(100); // 设置亮度（0-255）
+    
+    // 计算采样周期
+    sampling_period_us = round(1000000 * (1.0 / samplingFrequency));
+    
+    Serial.println("Music Rhythm Light - Started");
+    Serial.println("Frequency -> Color, Beat -> Trigger");
+}
+
+// 设置所有灯珠为指定颜色
+void setAllPixels(uint8_t r, uint8_t g, uint8_t b)
+{
+    for (int i = 0; i < LED_COUNT; i++)
+    {
+        strip.setPixelColor(i, strip.Color(r, g, b));
+    }
+    strip.show();
+}
+
+// 采样并计算 FFT
+void sampleAndFFT()
+{
+    unsigned long microseconds = micros();
+    
+    // 采样
+    for (int i = 0; i < samples; i++)
+    {
+        vReal[i] = analogRead(CHANNEL);
+        vImag[i] = 0;
+        
+        while (micros() - microseconds < sampling_period_us)
+        {
+            // 等待采样周期
+        }
+        microseconds += sampling_period_us;
+    }
+    
+    // FFT 计算
+    FFT.windowing(FFTWindow::Hamming, FFTDirection::Forward);
+    FFT.compute(FFTDirection::Forward);
+    FFT.complexToMagnitude();
+}
+
+// 计算三个频段的能量
+void calculateFrequencyBands()
+{
+    // 重置能量
+    lowEnergy = 0;
+    midEnergy = 0;
+    highEnergy = 0;
+    
+    // 分频段累加能量
+    // 低频：bin 1-8（约 62-500 Hz，鼓、贝斯）
+    for (int i = 1; i <= 8; i++)
+    {
+        lowEnergy += vReal[i];
+    }
+    
+    // 中频：bin 9-20（约 560-1250 Hz，人声、吉他）
+    for (int i = 9; i <= 20; i++)
+    {
+        midEnergy += vReal[i];
+    }
+    
+    // 高频：bin 21-31（约 1310-1940 Hz，镲片、高音）
+    for (int i = 21; i < samples / 2; i++)
+    {
+        highEnergy += vReal[i];
+    }
+    
+    // 打印调试信息
+    Serial.print("Low: ");
+    Serial.print(lowEnergy);
+    Serial.print(" | Mid: ");
+    Serial.print(midEnergy);
+    Serial.print(" | High: ");
+    Serial.println(highEnergy);
+}
+
+// 根据频段能量决定颜色
+void getColorFromFrequency(uint8_t &r, uint8_t &g, uint8_t &b)
+{
+    // 找出能量最大的频段
+    if (lowEnergy > midEnergy && lowEnergy > highEnergy)
+    {
+        // 低频 -> 红色
+        r = 255; g = 0; b = 0;
+        Serial.println("Color: RED (Low Freq)");
+    }
+    else if (midEnergy > lowEnergy && midEnergy > highEnergy)
+    {
+        // 中频 -> 绿色
+        r = 0; g = 255; b = 0;
+        Serial.println("Color: GREEN (Mid Freq)");
+    }
+    else
+    {
+        // 高频 -> 蓝色
+        r = 0; g = 0; b = 255;
+        Serial.println("Color: BLUE (High Freq)");
+    }
+}
+
+// 检测节拍（时域音量突变）
+bool detectBeat()
+{
+    // 计算当前音量（简单求和）
+    int currentVolume = 0;
+    for (int i = 0; i < samples; i++)
+    {
+        currentVolume += vReal[i];
+    }
+    currentVolume /= samples;
+    
+    // 计算音量变化
+    int volumeChange = abs(currentVolume - lastVolume);
+    lastVolume = currentVolume;
+    
+    // 检查是否超过阈值且间隔足够
+    unsigned long currentTime = millis();
+    if (volumeChange > beatThreshold && 
+        (currentTime - lastBeatTime) > minBeatInterval)
+    {
+        lastBeatTime = currentTime;
+        Serial.print("BEAT detected! Volume change: ");
+        Serial.println(volumeChange);
+        return true;
+    }
+    
+    return false;
+}
+
+void loop()
+{
+    // 1. 采样并做 FFT
+    sampleAndFFT();
+    
+    // 2. 计算频段能量
+    calculateFrequencyBands();
+    
+    // 3. 根据频段决定颜色
+    uint8_t r, g, b;
+    getColorFromFrequency(r, g, b);
+    
+    // 4. 检测节拍
+    bool beatDetected = detectBeat();
+    
+    // 5. 只有检测到节拍时才切换颜色
+    if (beatDetected)
+    {
+        setAllPixels(r, g, b);
+        Serial.println(">>> Light Updated! <<<");
+    }
+    
+    // 小延时，避免处理过快
+    delay(50);
+}
