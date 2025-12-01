@@ -35,7 +35,9 @@ const int beatThreshold = 80;              // 节拍检测阈值（音量波动�
 unsigned long lastBeatTime = 0;           // 上次节拍时间
 const unsigned long minBeatInterval = 300; // 最小节拍间隔（ms），两次打拍子的最小时间间隔
 const unsigned long lightDuration = 150;   // 灯光持续时间（ms），节拍后亮灯的时长
-bool lightOn = false;                     // 当前灯光状态
+const unsigned long magnetDuration = 2000; // 磁铁持续时间（ms），节拍后吸引磁铁的时长
+bool lightOn = false;              // 当前灯光状态
+bool magnetOn = false;            // 磁铁状态（备用）
 
 // ========== 频段能量存储 ==========
 float lowEnergy = 0;     // 低频能量（红色）
@@ -237,21 +239,33 @@ void loop()
     // 4. 检测节拍
     bool beatDetected = detectBeat();
     
-    // 5. 检测到节拍时点亮灯光
+    // 5. 检测到节拍时点亮灯光和启动磁铁
     if (beatDetected)
     {
         setAllPixels(r, g, b);
         lightOn = true;
-        Serial.println(">>> Light ON! <<<");
+        magnetOn = true;
+        analogWrite(11, 100);  // 启动磁铁
+        delay(2000); // 暂时方案，等待磁铁作用完成，否则两个模拟量冲突
+        analogWrite(11, 0); // 关闭磁铁
+        Serial.println(">>> Light ON + Magnet ON! <<<");
     }
     
-    // 6. 检查是否需要熄灯（节拍后经过指定时间）
+    // 6. 检查是否需要熄灭灯光（节拍后经过 lightDuration）
     if (lightOn && (millis() - lastBeatTime) > lightDuration)
     {
         setAllPixels(0, 0, 0); // 熄灭所有灯
         lightOn = false;
         Serial.println(">>> Light OFF <<<");
     }
+
+    // 7. 检查是否需要关闭磁铁（节拍后经过 magnetDuration）
+    if (magnetOn && (millis() - lastBeatTime) > magnetDuration)
+    {
+        analogWrite(11, 0); // 关闭磁铁
+        magnetOn = false;
+        Serial.println(">>> Magnet OFF <<<");
+    }    
     
     // 小延时，避免处理过快
     delay(50);
