@@ -10,7 +10,7 @@
  */
 
 #include "arduinoFFT.h"
-#include <Adafruit_NeoPixel.h>
+#include "Adafruit_NeoPixel.h"
 
 // ========== 硬件配置 ==========
 #define CHANNEL A0           // 音频输入通道
@@ -24,21 +24,31 @@ unsigned int sampling_period_us;          // 采样周期（微秒）
 
 float vReal[samples];
 float vImag[samples];
+float vRawAudio[samples];  // 存储 FFT 前的原始音频数据
 ArduinoFFT<float> FFT = ArduinoFFT<float>(vReal, vImag, samples, samplingFrequency);
 
 // ========== RGB 灯带 ==========
 Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 // ========== 节拍检测参数 ==========
-int lastVolume = 0;                       // 上一次音量
-const int beatThreshold = 80;             // 节拍检测阈值（音量突变）
+const int beatThreshold = 80;              // 节拍检测阈值（音量波动）- 降低以提高灵敏度
 unsigned long lastBeatTime = 0;           // 上次节拍时间
-const unsigned long minBeatInterval = 200; // 最小节拍间隔（ms）
+const unsigned long minBeatInterval = 300; // 最小节拍间隔（ms），两次打拍子的最小时间间隔
+const unsigned long lightDuration = 150;   // 灯光持续时间（ms），节拍后亮灯的时长
+bool lightOn = false;                     // 当前灯光状态
 
 // ========== 频段能量存储 ==========
 float lowEnergy = 0;     // 低频能量（红色）
 float midEnergy = 0;     // 中频能量（绿色）
 float highEnergy = 0;    // 高频能量（蓝色）
+
+// ========== 噪声降低和加权参数（参考 base.ino） ==========
+// 各频段的噪声阈值，用于滤除无声时的低频底噪
+const float noiseFloor[] = {3000, 0, 0};  // [低频, 中频, 高频]
+// 各频段的加权因子，用于平衡不同频段的强度差异
+const float bandWeights[] = {1.0, 2.0, 3.5};   // [低频, 中频, 高频] - 高频加权更多
+// 处理后能量的最小阈值，低于此值认为无音乐信号
+const float minEnergyThreshold = 50;
 
 void setup()
 {
@@ -74,7 +84,8 @@ void sampleAndFFT()
     // 采样
     for (int i = 0; i < samples; i++)
     {
-        vReal[i] = analogRead(CHANNEL);
+        vRawAudio[i] = analogRead(CHANNEL);  // 保存原始音频数据
+        vReal[i] = vRawAudio[i];             // 复制到 vReal 供 FFT 使用
         vImag[i] = 0;
         
         while (micros() - microseconds < sampling_period_us)
@@ -117,7 +128,17 @@ void calculateFrequencyBands()
         highEnergy += vReal[i];
     }
     
-    // 打印调试信息
+    // ========== 降噪处理：减去噪声阈值 ==========
+    lowEnergy = (lowEnergy > noiseFloor[0]) ? (lowEnergy - noiseFloor[0]) : 0;
+    midEnergy = (midEnergy > noiseFloor[1]) ? (midEnergy - noiseFloor[1]) : 0;
+    highEnergy = (highEnergy > noiseFloor[2]) ? (highEnergy - noiseFloor[2]) : 0;
+    
+    // ========== 加权处理：使高频更容易被检测 ==========
+    lowEnergy *= bandWeights[0];
+    midEnergy *= bandWeights[1];
+    highEnergy *= bandWeights[2];
+    
+    // 打印调试信息（含处理后的能量值）
     Serial.print("Low: ");
     Serial.print(lowEnergy);
     Serial.print(" | Mid: ");
@@ -138,41 +159,63 @@ void getColorFromFrequency(uint8_t &r, uint8_t &g, uint8_t &b)
     }
     else if (midEnergy > lowEnergy && midEnergy > highEnergy)
     {
-        // 中频 -> 绿色
+        // 中频 -> 绿色（人声、吉他）
         r = 0; g = 255; b = 0;
-        Serial.println("Color: GREEN (Mid Freq)");
+        Serial.println("Color: GREEN (Mid Freq - Voice/Guitar)");
+    }
+    else if (highEnergy > lowEnergy && highEnergy > midEnergy)
+    {
+        // 高频 -> 蓝色（女声、高音）
+        r = 0; g = 0; b = 255;
+        Serial.println("Color: BLUE (High Freq - Female Voice/Treble)");
     }
     else
     {
-        // 高频 -> 蓝色
-        r = 0; g = 0; b = 255;
-        Serial.println("Color: BLUE (High Freq)");
+        // 默认：当所有能量都很低时，保持黑色或上一个颜色
+        r = 0; g = 0; b = 0;
+        Serial.println("Color: BLACK (No signal)");
     }
 }
 
-// 检测节拍（时域音量突变）
+// 检测节拍（基于原始音频数据的 peakToPeak）
 bool detectBeat()
 {
-    // 计算当前音量（简单求和）
-    int currentVolume = 0;
+    // 使用原始音频数据计算峰值到谷值的差
+    float signalMax = 0;
+    float signalMin = 1024;
+    
     for (int i = 0; i < samples; i++)
     {
-        currentVolume += vReal[i];
+        if (vRawAudio[i] > signalMax)
+        {
+            signalMax = vRawAudio[i];
+        }
+        if (vRawAudio[i] < signalMin)
+        {
+            signalMin = vRawAudio[i];
+        }
     }
-    currentVolume /= samples;
-    
-    // 计算音量变化
-    int volumeChange = abs(currentVolume - lastVolume);
-    lastVolume = currentVolume;
+    float peakToPeak = signalMax - signalMin;
     
     // 检查是否超过阈值且间隔足够
     unsigned long currentTime = millis();
-    if (volumeChange > beatThreshold && 
+    /*
+    Serial.print("signalMax: ");
+    Serial.print(signalMax);
+    Serial.print(" | signalMin: ");
+    Serial.print(signalMin);
+    Serial.print(" | PeakToPeak: ");
+    Serial.println(peakToPeak);
+    Serial.print("beatThreshold: ");
+    Serial.println(beatThreshold);
+    */
+
+    if (peakToPeak > beatThreshold && 
         (currentTime - lastBeatTime) > minBeatInterval)
     {
         lastBeatTime = currentTime;
-        Serial.print("BEAT detected! Volume change: ");
-        Serial.println(volumeChange);
+        Serial.print("@@@@@@@@@@@@@@@@@@@@ BEAT detected! PeakToPeak: ");
+        Serial.println(peakToPeak);
         return true;
     }
     
@@ -194,13 +237,23 @@ void loop()
     // 4. 检测节拍
     bool beatDetected = detectBeat();
     
-    // 5. 只有检测到节拍时才切换颜色
+    // 5. 检测到节拍时点亮灯光
     if (beatDetected)
     {
         setAllPixels(r, g, b);
-        Serial.println(">>> Light Updated! <<<");
+        lightOn = true;
+        Serial.println(">>> Light ON! <<<");
+    }
+    
+    // 6. 检查是否需要熄灯（节拍后经过指定时间）
+    if (lightOn && (millis() - lastBeatTime) > lightDuration)
+    {
+        setAllPixels(0, 0, 0); // 熄灭所有灯
+        lightOn = false;
+        Serial.println(">>> Light OFF <<<");
     }
     
     // 小延时，避免处理过快
     delay(50);
+    //delay(300);
 }
