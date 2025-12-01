@@ -31,8 +31,6 @@ const unsigned long minLightChangeInterval = 300;
 
 // 噪声阈值数组（用于不同频率段的噪声过滤）
 int noise[] = {204, 198, 100, 85, 85, 80, 80, 80};
-// 噪声因子数组（用于放大处理后的信号）
-float noise_fact[] = {15, 7, 1.5, 1, 1.2, 1.4, 1.7, 3};
 // 调整后的噪声因子数组
 float noise_fact_adj[] = {15, 7, 1.5, 1, 1.2, 1.4, 1.7, 3};
 
@@ -57,8 +55,18 @@ void setup()
     // 初始化串口通信，波特率9600
     Serial.begin(9600);
     delay(1000);
-    Serial.println("Demo3 - Beat Detection FFT Started");
+    Serial.println("Baseline - Beat Detection FFT Started");
     Serial.println("Ready");
+}
+
+// 设置所有RGB灯珠的颜色
+void setAllPixels(int r, int g, int b)
+{
+    for (int i = 0; i < 10; i++)
+    {
+        rgb_display_9.setPixelColor(i, r, g, b);
+    }
+    rgb_display_9.show();
 }
 
 void updateLED()
@@ -71,9 +79,6 @@ void updateLED()
         Serial.println("Light change ignored - too fast");
         return;
     }
-
-    Serial.print("aaaaaa");
-    Serial.println(" ==");
 
     // 灯色循环变化：红 -> 绿 -> 蓝 -> 黑（空闲）
     if (lightStage == 3 || lightStage == 2)
@@ -99,16 +104,6 @@ void updateLED()
 
     // 更新上次灯色变化时间
     lastLightChangeTime = currentTime;
-}
-
-// 设置所有RGB灯珠的颜色
-void setAllPixels(int r, int g, int b)
-{
-    for (int i = 0; i < 10; i++)
-    {
-        rgb_display_9.setPixelColor(i, r, g, b);
-    }
-    rgb_display_9.show();
 }
 
 void loop()

@@ -142,7 +142,6 @@ void loop()
 
     average = total / numReadings;
 
-    int hueValue = map(average, 200, 1500, 0, 150);
     int brightnessValue = map(peakToPeak, 1, 400, 0, 255);
 
     if (brightnessValue > 180)
@@ -154,8 +153,6 @@ void loop()
     Serial.print(average);
     Serial.print(" | Peak: ");
     Serial.print(peakToPeak);
-    Serial.print(" | Hue: ");
-    Serial.print(hueValue);
     Serial.print(" | Brightness: ");
     Serial.print(brightnessValue);
     Serial.print(" | Freq: ");
