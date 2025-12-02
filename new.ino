@@ -16,6 +16,8 @@
 #define CHANNEL A0           // 音频输入通道
 #define LED_PIN 9            // RGB灯带控制引脚
 #define LED_COUNT 10         // 灯珠数量
+#define MAGNET_PIN_1 10      // 电磁铁1控制引脚
+#define MAGNET_PIN_2 11      // 电磁铁2控制引脚
 
 // ========== FFT 参数 ==========
 const uint16_t samples = 64;              // 采样点数（2的幂）
@@ -35,9 +37,14 @@ const int beatThreshold = 80;              // 节拍检测阈值（音量波动�
 unsigned long lastBeatTime = 0;           // 上次节拍时间
 const unsigned long minBeatInterval = 300; // 最小节拍间隔（ms），两次打拍子的最小时间间隔
 const unsigned long lightDuration = 150;   // 灯光持续时间（ms），节拍后亮灯的时长
-const unsigned long magnetDuration = 2000; // 磁铁持续时间（ms），节拍后吸引磁铁的时长
+const unsigned long magnetDuration = 200; // 磁铁持续时间（ms），节拍后吸引磁铁的时长
+const unsigned long magnetCooldown = 500;  // 磁铁冷却时间（ms），两次吸引之间的最小间隔
 bool lightOn = false;              // 当前灯光状态
-bool magnetOn = false;            // 磁铁状态（备用）
+bool magnetOn1 = false;            // 电磁铁1状态
+bool magnetOn2 = false;            // 电磁铁2状态
+unsigned long lastMagnet1Time = 0; // 电磁铁1上次启动时间
+unsigned long lastMagnet2Time = 0; // 电磁铁2上次启动时间
+const int magnetPower = 200;
 
 // ========== 频段能量存储 ==========
 float lowEnergy = 0;     // 低频能量（红色）
@@ -224,8 +231,76 @@ bool detectBeat()
     return false;
 }
 
+// 控制电磁铁1（10号引脚）
+void magnetOn1_control(bool on)
+{
+    if (on)
+    {
+        // 检查冷却时间（从上次关闭到现在的时间间隔）
+        unsigned long currentTime = millis();
+        if ((currentTime - lastMagnet1Time) < magnetCooldown)
+        {
+            // 间隔不足，扔掉这个 on 命令
+            Serial.println(">>> Magnet 1 ON rejected - cooldown not ready <<<");
+            return;
+        }
+        
+        analogWrite(MAGNET_PIN_1, magnetPower);
+        magnetOn1 = true;
+        Serial.println(">>> Magnet 1 ON <<<");
+    }
+    else
+    {
+        analogWrite(MAGNET_PIN_1, 0);
+        magnetOn1 = false;
+        lastMagnet1Time = millis();  // 记录关闭时间
+        Serial.println(">>> Magnet 1 OFF <<<");
+    }
+}
+
+// 控制电磁铁2（11号引脚）
+void magnetOn2_control(bool on)
+{
+    if (on)
+    {
+        // 检查冷却时间（从上次关闭到现在的时间间隔）
+        unsigned long currentTime = millis();
+        if ((currentTime - lastMagnet2Time) < magnetCooldown)
+        {
+            // 间隔不足，扔掉这个 on 命令
+            Serial.println(">>> Magnet 2 ON rejected - cooldown not ready <<<");
+            return;
+        }
+        
+        analogWrite(MAGNET_PIN_2, magnetPower);
+        magnetOn2 = true;
+        Serial.println(">>> Magnet 2 ON <<<");
+    }
+    else
+    {
+        analogWrite(MAGNET_PIN_2, 0);
+        magnetOn2 = false;
+        lastMagnet2Time = millis();  // 记录关闭时间
+        Serial.println(">>> Magnet 2 OFF <<<");
+    }
+}
+
 void loop()
 {
+    // 检查是否有电磁铁工作，如果有则跳过采样和节拍检测（防止干扰）
+    if (magnetOn1 || magnetOn2)
+    {
+        // 只处理磁铁的关闭逻辑，不进行采样和节拍检测
+        if ((millis() - lastBeatTime) > magnetDuration)
+        {
+            magnetOn1_control(false);  // 关闭电磁铁1
+            magnetOn2_control(false);  // 关闭电磁铁2
+            Serial.println(">>> Magnets OFF after duration <<<");
+        }
+        delay(50);
+        return;  // 跳过本次 loop 的其他处理
+    }
+    
     // 1. 采样并做 FFT
     sampleAndFFT();
     
@@ -244,11 +319,29 @@ void loop()
     {
         setAllPixels(r, g, b);
         lightOn = true;
-        magnetOn = true;
-        analogWrite(11, 100);  // 启动磁铁
-        delay(2000); // 暂时方案，等待磁铁作用完成，否则两个模拟量冲突
-        analogWrite(11, 0); // 关闭磁铁
-        Serial.println(">>> Light ON + Magnet ON! <<<");
+
+        if (highEnergy > lowEnergy && highEnergy > midEnergy)
+        {
+            // 高频 -> 头和手都动
+            magnetOn1_control(true);   // 启动电磁铁1（头）
+            magnetOn2_control(true);   // 启动电磁铁2（手）
+            Serial.println(">>> Light ON + Magnet 1&2 ON (High Freq)! <<<");
+        }
+        else if (lowEnergy > midEnergy && lowEnergy > highEnergy)
+        {
+            // 低频 -> 只动手
+            //magnetOn1_control(false);  // 关闭电磁铁1（头） xieyan
+            magnetOn1_control(true);
+            magnetOn2_control(true);   // 启动电磁铁2（手）
+            Serial.println(">>> Light ON + Magnet 2 ON (Low Freq)! <<<");
+        }
+        else
+        {
+            // 中频 -> 头和手都动
+            magnetOn1_control(true);   // 启动电磁铁1（头）
+            magnetOn2_control(true);   // 启动电磁铁2（手）
+            Serial.println(">>> Light ON + Magnet 1&2 ON (Mid Freq)! <<<");
+        }
     }
     
     // 6. 检查是否需要熄灭灯光（节拍后经过 lightDuration）
@@ -258,14 +351,6 @@ void loop()
         lightOn = false;
         Serial.println(">>> Light OFF <<<");
     }
-
-    // 7. 检查是否需要关闭磁铁（节拍后经过 magnetDuration）
-    if (magnetOn && (millis() - lastBeatTime) > magnetDuration)
-    {
-        analogWrite(11, 0); // 关闭磁铁
-        magnetOn = false;
-        Serial.println(">>> Magnet OFF <<<");
-    }    
     
     // 小延时，避免处理过快
     delay(50);
