@@ -156,6 +156,8 @@ void calculateFrequencyBands()
     Serial.println(highEnergy);
 }
 
+
+/*
 // 根据频段能量决定颜色
 void getColorFromFrequency(uint8_t &r, uint8_t &g, uint8_t &b)
 {
@@ -176,6 +178,36 @@ void getColorFromFrequency(uint8_t &r, uint8_t &g, uint8_t &b)
     {
         // 高频 -> 蓝色（女声、高音）
         r = 0; g = 0; b = 255;
+        Serial.println("Color: BLUE (High Freq - Female Voice/Treble)");
+    }
+    else
+    {
+        // 默认：当所有能量都很低时，保持黑色或上一个颜色
+        r = 0; g = 0; b = 0;
+        Serial.println("Color: BLACK (No signal)");
+    }
+}*/
+
+// 根据频段能量决定颜色
+void getColorFromFrequency(uint8_t &r, uint8_t &g, uint8_t &b)
+{
+    // 找出能量最大的频段
+    if (lowEnergy > midEnergy && lowEnergy > highEnergy)
+    {
+        // 低频 -> 白色
+        r = 255; g = 255; b = 255;
+        Serial.println("Color: RED (Low Freq)");
+    }
+    else if (midEnergy > lowEnergy && midEnergy > highEnergy)
+    {
+        // 中频 -> 黄色（人声、吉他）
+        r = 255; g = 215; b = 0;
+        Serial.println("Color: GREEN (Mid Freq - Voice/Guitar)");
+    }
+    else if (highEnergy > lowEnergy && highEnergy > midEnergy)
+    {
+        // 高频 -> 粉色（女声、高音）
+        r = 255; g = 0; b = 255;
         Serial.println("Color: BLUE (High Freq - Female Voice/Treble)");
     }
     else
